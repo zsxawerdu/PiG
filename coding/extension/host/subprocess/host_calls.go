@@ -684,6 +684,10 @@ func (h *Host) handleProviderRegistrationCall(ctx context.Context, me *managedEx
 		return nil, fmt.Errorf("provider %s: decode config: %w", request.Name, err)
 	}
 	h.attachProviderOperations(me, request, &config)
+	if err := h.attachProviderOAuth(me, request.Name, request.Config, &config); err != nil {
+		h.xref.unhold(conn, callID)
+		return nil, err
+	}
 	if err := h.providerRuntime.RegisterProvider(request.Name, config, extConfigOrigin(me.config)); err != nil {
 		h.xref.unhold(conn, callID)
 		return nil, err

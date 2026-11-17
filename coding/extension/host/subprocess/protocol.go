@@ -275,10 +275,11 @@ type FlagDecl struct {
 
 // ProviderDecl registers or overrides a model provider.
 type ProviderDecl struct {
-	StreamSimple bool                       `json:"stream_simple,omitempty"`
-	Name         string                     `json:"name"`
-	Config       json.RawMessage            `json:"config"`
-	Native       *NativeProviderDeclaration `json:"native,omitempty"`
+	StreamSimple  bool                       `json:"stream_simple,omitempty"`
+	RefreshModels bool                       `json:"refresh_models,omitempty"`
+	Name          string                     `json:"name"`
+	Config        json.RawMessage            `json:"config"`
+	Native        *NativeProviderDeclaration `json:"native,omitempty"`
 	// ImageAPIs and ClassifierAPIs name the APIs whose implementations (ProviderConfig images and classifiers) run in the extension.
 	ImageAPIs      []string `json:"image_apis,omitempty"`
 	ClassifierAPIs []string `json:"classifier_apis,omitempty"`

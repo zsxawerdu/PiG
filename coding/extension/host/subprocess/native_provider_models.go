@@ -107,7 +107,15 @@ func (p *nativeProviderProxy) refreshModels(refresh ai.RefreshModelsContext) err
 	if !slices.Contains(p.declaration.Methods, "refreshModels") {
 		return nil
 	}
-	_, err := p.objectCall(refresh.Signal, "refreshModels", refreshModelsParams(refresh), func(raw json.RawMessage) (json.RawMessage, error) {
+	_, err := p.objectCall(refresh.Signal, "refreshModels", refreshModelsParams(refresh), refreshModelsPublishCallback(refresh, func(token string) error {
+		_, err := p.objectCall(refresh.Signal, "update", map[string]any{"token": token}, nil)
+		return err
+	}))
+	return err
+}
+
+func refreshModelsPublishCallback(refresh ai.RefreshModelsContext, runUpdate func(token string) error) func(json.RawMessage) (json.RawMessage, error) {
+	return func(raw json.RawMessage) (json.RawMessage, error) {
 		var callback struct {
 			Method string `json:"method"`
 			Params struct {
@@ -137,8 +145,11 @@ func (p *nativeProviderProxy) refreshModels(refresh ai.RefreshModelsContext) err
 		var updateErr error
 		if token := callback.Params.Token; token != "" {
 			publication.Update = func() {
-				_, updateErr = p.objectCall(refresh.Signal, "update", map[string]any{"token": token}, nil)
+				updateErr = runUpdate(token)
 			}
+		}
+		if refresh.Publish == nil {
+			return nil, fmt.Errorf("refresh publish is unavailable")
 		}
 		accepted, err := refresh.Publish(publication)
 		if err != nil {
@@ -148,8 +159,7 @@ func (p *nativeProviderProxy) refreshModels(refresh ai.RefreshModelsContext) err
 			return nil, updateErr
 		}
 		return json.Marshal(accepted)
-	})
-	return err
+	}
 }
 
 // refreshModelsParams is the refreshModels call's argument: the context minus its callbacks. baseUrl is absent when the registered provider has none, as the

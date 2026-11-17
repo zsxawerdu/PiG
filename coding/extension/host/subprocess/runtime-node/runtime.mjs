@@ -2173,6 +2173,7 @@ export class Runtime {
     this.providers = new Map();
     this.oauthProviders = new Map();
     this.providerStreams = new Map();
+    this.providerRefreshModels = new Map();
     // The image and classifier implementations of each provider config (types.ts:1896-1903). They cannot cross the process boundary: the register frame names their APIs and the host calls back with provider_operation.
     this.providerOperations = new Map();
     // registeredProviderConfigs holds the provider configs this extension
@@ -2446,6 +2447,7 @@ export class Runtime {
     this.registryProviders.delete(name);
     this.providers.delete(name);
     this.providerStreams.delete(name);
+    this.providerRefreshModels.delete(name);
     this.providerOperations.delete(name);
     this.oauthProviders.delete(name);
     this.registeredProviderConfigs.delete(name);
@@ -4625,6 +4627,11 @@ export class Runtime {
       const {streamSimple, ...serializable} = config;
       config = serializable;
     }
+    if (typeof config.refreshModels === "function") {
+      this.providerRefreshModels.set(name, config.refreshModels);
+      const {refreshModels, ...serializable} = config;
+      config = serializable;
+    } else this.providerRefreshModels.delete(name);
     // Pi merges the defined values of a re-registration over the previous root (model-runtime.ts:753-766), so a registration that defines neither keeps the implementations of the root it merged over.
     if (config.images !== undefined || config.classifiers !== undefined) {
       this.providerOperations.set(name, { images: config.images, classifiers: config.classifiers });
@@ -4651,7 +4658,7 @@ export class Runtime {
 
   // The declaration of a provider config, as the register frame and a registration after the factory carry it: the config without its callbacks, and the operations that run in this process.
   providerDeclaration(name, config) {
-    return { name, config, ...(this.providerStreams.has(name) ? { stream_simple: true } : {}), ...this.providerOperationAPIs(name) };
+    return { name, config, ...(this.providerStreams.has(name) ? { stream_simple: true } : {}), ...(this.providerRefreshModels.has(name) ? { refresh_models: true } : {}), ...this.providerOperationAPIs(name) };
   }
 
   // The APIs a provider config implements, as the register frame names them.
@@ -4674,6 +4681,7 @@ export class Runtime {
     const declaration=nativeDeclaration(provider, key);
     this.registeredProviderConfigs.delete(provider.id);
     this.providerStreams.delete(provider.id);
+    this.providerRefreshModels.delete(provider.id);
     this.providerOperations.delete(provider.id);
     this.providers.delete(provider.id);
     this.nativeProviders.set(provider.id, provider);
@@ -4694,6 +4702,7 @@ export class Runtime {
     this.registryProviders.delete(name);
     this.providers.delete(name);
     this.providerStreams.delete(name);
+    this.providerRefreshModels.delete(name);
     this.providerOperations.delete(name);
     this.oauthProviders.delete(name);
     this.registeredProviderConfigs.delete(name);
@@ -4819,8 +4828,25 @@ export class Runtime {
           return;
         }
         case "provider_operation": {
-          // types.ts:1896-1898: the implementation of the config's image or classifier API runs here with the model, the context and the resolved request options; its result, or its error, is the answer.
+          // types.ts:1896-1898,1930: the implementation of the config's refreshModels, image or classifier API runs here with its context and options; its result, or its error, is the answer.
           const { kind, api, model, context, options } = request.args ?? {};
+          if (kind === "refreshModels") {
+            const refreshModels = this.providerRefreshModels.get(request.tool);
+            if (typeof refreshModels !== "function") throw new Error(`Provider ${request.tool} has no refreshModels implementation`);
+            const publish = async (publication = {}) => {
+              const { update, ...value } = publication ?? {};
+              const token = randomUUID();
+              if (update) this.providerUpdates.set(token, update);
+              try {
+                return await this.call("provider.callback", { provider: request.tool, method: "publish", params: { publication: value, token: update ? token : undefined } }, { parent: id });
+              } finally {
+                this.providerUpdates.delete(token);
+              }
+            };
+            const models = await refreshModels({ ...context, signal: ctx[requestSignal], publish });
+            await this.respond(id, models ?? null);
+            return;
+          }
           if (kind !== "images" && kind !== "classifiers") throw new Error(`Unknown provider operation ${JSON.stringify(kind)}`);
           const label = kind === "images" ? "image" : "classifier";
           const method = kind === "images" ? "generateImages" : "classify";

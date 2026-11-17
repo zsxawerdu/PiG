@@ -396,6 +396,7 @@ type Host struct {
 	providerRuntime       *extension.ExtensionRuntime
 	nativeProviders       map[*Conn]map[string]*nativeProviderProxy
 	nativeProviderHandles map[string]*nativeProviderProxy
+	providerOpCallbacks   map[*Conn]map[string]func(json.RawMessage) (json.RawMessage, error)
 
 	// oauthLoginSessions holds the in-flight OAuth login callbacks per extension
 	// name so the oauth.cb.* calls an extension issues during login route back

@@ -567,9 +567,17 @@ func (r *ModelRegistry) composeProvider(base *ai.ModelsProvider, extension *Prov
 		}
 		if extension.OAuth != nil {
 			legacy := extension.OAuth
-			auth.OAuth = &ai.OAuthAuth{Name: legacy.Name, IsSubscription: legacy.IsSubscription, Login: adaptExtensionOAuthLogin(legacy.Login), Refresh: legacy.RefreshToken, ToAuth: func(credential ai.Credential) (ai.ModelAuth, error) {
-				return ai.ModelAuth{APIKey: legacy.GetAPIKey(credential)}, nil
-			}}
+			var login func(context.Context, ai.AuthInteraction, ai.LoginOptions) (ai.Credential, error)
+			if legacy.Login != nil {
+				login = adaptExtensionOAuthLogin(legacy.Login)
+			}
+			var toAuth func(ai.Credential) (ai.ModelAuth, error)
+			if legacy.GetAPIKey != nil {
+				toAuth = func(credential ai.Credential) (ai.ModelAuth, error) {
+					return ai.ModelAuth{APIKey: legacy.GetAPIKey(credential)}, nil
+				}
+			}
+			auth.OAuth = &ai.OAuthAuth{Name: legacy.Name, IsSubscription: legacy.IsSubscription, Login: login, Refresh: legacy.RefreshToken, ToAuth: toAuth}
 		}
 	}
 	provider := new(*base)

@@ -17,8 +17,9 @@ const RequestProviderOperation = "provider_operation"
 
 // The kinds of a provider operation.
 const (
-	ProviderOperationImages      = "images"
-	ProviderOperationClassifiers = "classifiers"
+	ProviderOperationImages        = "images"
+	ProviderOperationClassifiers   = "classifiers"
+	ProviderOperationRefreshModels = "refreshModels"
 )
 
 // encodeImagesOptions is the wire form of the options an image API receives. It carries the caller's API key; the extension receives it as `apiKey`.
@@ -75,11 +76,14 @@ func encodeClassifierOptions(o ai.ClassifierOptions) map[string]any {
 	return values
 }
 
-// attachProviderOperations wires the implementations a provider declaration names to the extension that owns them: the streamSimple callback, and the image and classifier APIs.
-// pig additive (D19): connection-owned callbacks carry the image and classifier implementations across the SDK boundary without changing registry scope.
+// attachProviderOperations wires the implementations a provider declaration names to the extension that owns them: the streamSimple and refreshModels callbacks, and the image and classifier APIs.
+// pig additive (D19): connection-owned callbacks carry the image, classifier, and refreshModels implementations across the SDK boundary without changing registry scope.
 func (h *Host) attachProviderOperations(me *managedExt, provider ProviderDecl, cfg *extension.ProviderConfig) {
 	if provider.StreamSimple {
 		cfg.StreamSimple = h.providerStreamCallback(me, provider.Name)
+	}
+	if provider.RefreshModels {
+		cfg.RefreshModels = h.providerRefreshModelsCallback(me, provider.Name)
 	}
 	if len(provider.ImageAPIs) > 0 {
 		cfg.Images = make(ai.ProviderImageAPIMap, len(provider.ImageAPIs))
@@ -96,6 +100,82 @@ func (h *Host) attachProviderOperations(me *managedExt, provider ProviderDecl, c
 				return remoteOperation[ai.ClassifierResult](ctx, me, provider.Name, ProviderOperationClassifiers, api, extension.ModelValue{Model: model}, request, encodeClassifierOptions(options))
 			}}
 		}
+	}
+}
+
+func (h *Host) providerRefreshModelsCallback(me *managedExt, provider string) func(extension.RefreshModelsContext) ([]extension.ProviderModelConfig, error) {
+	return func(refresh extension.RefreshModelsContext) ([]extension.ProviderModelConfig, error) {
+		ctx := refresh.Signal
+		if ctx == nil {
+			ctx = context.Background()
+		}
+		args, err := json.Marshal(map[string]any{
+			"kind":    ProviderOperationRefreshModels,
+			"context": refreshModelsParams(refresh),
+		})
+		if err != nil {
+			return nil, err
+		}
+		conn := me.connection()
+		if conn == nil {
+			return nil, fmt.Errorf("provider %q extension is disconnected", provider)
+		}
+		env := &Envelope{
+			Type:    MsgRequest,
+			ID:      fmt.Sprintf("r%d", conn.nextID.Add(1)),
+			Request: &RequestPayload{Method: RequestProviderOperation, Tool: provider, Args: args},
+		}
+		h.mu.Lock()
+		if h.providerOpCallbacks == nil {
+			h.providerOpCallbacks = map[*Conn]map[string]func(json.RawMessage) (json.RawMessage, error){}
+		}
+		if h.providerOpCallbacks[conn] == nil {
+			h.providerOpCallbacks[conn] = map[string]func(json.RawMessage) (json.RawMessage, error){}
+		}
+		h.providerOpCallbacks[conn][env.ID] = refreshModelsPublishCallback(refresh, func(token string) error {
+			updateArgs, err := json.Marshal(map[string]any{"method": "update", "params": map[string]any{"token": token}})
+			if err != nil {
+				return err
+			}
+			resp, err := conn.Request(ctx, &Envelope{
+				Type:    MsgRequest,
+				ID:      fmt.Sprintf("r%d", conn.nextID.Add(1)),
+				Request: &RequestPayload{Method: MethodProviderSync, Tool: provider, Args: updateArgs},
+			})
+			if err != nil {
+				return err
+			}
+			if resp != nil && resp.Response != nil && resp.Response.Error != nil {
+				return resp.Response.Error.ToError()
+			}
+			return nil
+		})
+		h.mu.Unlock()
+		defer func() {
+			h.mu.Lock()
+			if callbacks := h.providerOpCallbacks[conn]; callbacks != nil {
+				delete(callbacks, env.ID)
+				if len(callbacks) == 0 {
+					delete(h.providerOpCallbacks, conn)
+				}
+			}
+			h.mu.Unlock()
+		}()
+		response, err := conn.Request(ctx, env)
+		if err != nil {
+			return nil, err
+		}
+		if response == nil || response.Response == nil {
+			return nil, fmt.Errorf("provider %q returned no response", provider)
+		}
+		if response.Response.Error != nil {
+			return nil, response.Response.Error.ToError()
+		}
+		var result []extension.ProviderModelConfig
+		if err := json.Unmarshal(response.Response.Result, &result); err != nil {
+			return nil, err
+		}
+		return result, nil
 	}
 }
 
@@ -164,6 +244,9 @@ func (p *nativeProviderProxy) operations(carrier *extension.NativeProvider) {
 func (h *Host) queueLoadedProvider(me *managedExt, conn *Conn, provider ProviderDecl, cfg extension.ProviderConfig) error {
 	// Model-provider registration and OAuth registration are independent concerns: an extension may contribute an OAuth login with no model-provider callback wired on the host, so gate only the model-provider hook, never the OAuth registration.
 	h.attachProviderOperations(me, provider, &cfg)
+	if err := h.attachProviderOAuth(me, provider.Name, provider.Config, &cfg); err != nil {
+		return err
+	}
 	var withdrawRecord func()
 	if h.uiBridge != nil {
 		withdrawRecord = h.uiBridge.RecordProviderRegistration(provider.Name, provider.Config)

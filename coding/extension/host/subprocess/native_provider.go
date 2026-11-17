@@ -389,6 +389,25 @@ func (h *Host) publishNativeProvider(p *nativeProviderProxy) {
 }
 
 func (h *Host) handleProviderPublication(ctx context.Context, conn *Conn, call *CallPayload) (*CallResultPayload, error) {
+	h.mu.Lock()
+	var opCallback func(json.RawMessage) (json.RawMessage, error)
+	if callbacks := h.providerOpCallbacks[conn]; callbacks != nil {
+		opCallback = callbacks[call.ParentRequestID]
+	}
+	h.mu.Unlock()
+	if opCallback != nil {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		result, err := opCallback(call.Args)
+		if err != nil {
+			return nil, err
+		}
+		if len(result) == 0 {
+			result = json.RawMessage("null")
+		}
+		return &CallResultPayload{Result: result}, nil
+	}
 	var args struct {
 		Provider string          `json:"provider"`
 		Persist  json.RawMessage `json:"persist"`

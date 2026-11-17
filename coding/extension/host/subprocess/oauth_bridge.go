@@ -266,6 +266,32 @@ func storedOAuthCredential(creds ai.OAuthCredentials) (json.RawMessage, error) {
 	return json.Marshal(credential)
 }
 
+func (h *Host) attachProviderOAuth(me *managedExt, name string, config json.RawMessage, cfg *extension.ProviderConfig) error {
+	if cfg == nil || cfg.OAuth == nil {
+		return nil
+	}
+	var probe struct {
+		OAuth *ProviderOAuthConfig `json:"oauth"`
+	}
+	if err := json.Unmarshal(config, &probe); err != nil {
+		return fmt.Errorf("provider %s: decode oauth config: %w", name, err)
+	}
+	if probe.OAuth == nil {
+		return nil
+	}
+	proxy := &oauthProxy{host: h, me: me, name: name, cfg: *probe.OAuth}
+	if probe.OAuth.HasLogin {
+		cfg.OAuth.Login = proxy.Login
+	}
+	if probe.OAuth.HasRefresh {
+		cfg.OAuth.RefreshToken = proxy.RefreshTokenContext
+	}
+	if probe.OAuth.HasGetAPIKey || cfg.OAuth.GetAPIKey == nil {
+		cfg.OAuth.GetAPIKey = proxy.GetAPIKey
+	}
+	return nil
+}
+
 // registerOAuthProvider inspects a provider's config for an oauth sub-config
 // and, when present, registers a bridged ai OAuth provider driven by the current connection.
 // Called from both the isolated and packed register paths. A nil/absent oauth

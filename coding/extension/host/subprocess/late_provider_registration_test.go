@@ -28,10 +28,13 @@ func TestLateProviderRegistrationCallWiresDeclaredOperations(t *testing.T) {
 		}
 	}
 
-	call(`{"name":"late","config":{"api":"late-chat-api","baseUrl":"https://late.test/v1","apiKey":"k"},"stream_simple":true,"image_apis":["late-images","other-images"],"classifier_apis":["late-classifier"]}`)
+	call(`{"name":"late","config":{"api":"late-chat-api","baseUrl":"https://late.test/v1","apiKey":"k"},"stream_simple":true,"refresh_models":true,"image_apis":["late-images","other-images"],"classifier_apis":["late-classifier"]}`)
 	declared := seen[0]
 	if declared.StreamSimple == nil {
 		t.Fatal("a declared streamSimple was dropped")
+	}
+	if declared.RefreshModels == nil {
+		t.Fatal("a declared refreshModels was dropped")
 	}
 	if got := slices.Sorted(func(yield func(ai.ImageAPI) bool) {
 		for api := range declared.Images {
@@ -51,7 +54,7 @@ func TestLateProviderRegistrationCallWiresDeclaredOperations(t *testing.T) {
 
 	// A registration that declares nothing wires nothing: the registry keeps what an earlier one defined (model-runtime.ts:753-766).
 	call(`{"name":"late","config":{"baseUrl":"https://late.test/v2"}}`)
-	if again := seen[1]; again.StreamSimple != nil || again.Images != nil || again.Classifiers != nil {
+	if again := seen[1]; again.StreamSimple != nil || again.RefreshModels != nil || again.Images != nil || again.Classifiers != nil {
 		t.Fatalf("a registration without operations wired %+v", again)
 	}
 }
